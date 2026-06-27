@@ -1349,7 +1349,7 @@ retry_wait:
 	}
 }
 
-static bool raid10_write_request(struct mddev *mddev, struct bio *bio,
+static void raid10_write_request(struct mddev *mddev, struct bio *bio,
 				 struct r10bio *r10_bio)
 {
 	struct r10conf *conf = mddev->private;
@@ -1365,7 +1365,7 @@ static bool raid10_write_request(struct mddev *mddev, struct bio *bio,
 		/* Bail out if REQ_NOWAIT is set for the bio */
 		if (bio->bi_opf & REQ_NOWAIT) {
 			bio_wouldblock_error(bio);
-			return false;
+			return;
 		}
 		for (;;) {
 			prepare_to_wait(&conf->wait_barrier,
@@ -1381,7 +1381,7 @@ static bool raid10_write_request(struct mddev *mddev, struct bio *bio,
 	sectors = r10_bio->sectors;
 	if (!regular_request_wait(mddev, conf, bio, sectors)) {
 		free_r10bio(r10_bio);
-		return false;
+		return;
 	}
 
 	if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery) &&
@@ -1398,7 +1398,7 @@ static bool raid10_write_request(struct mddev *mddev, struct bio *bio,
 		if (bio->bi_opf & REQ_NOWAIT) {
 			allow_barrier(conf);
 			bio_wouldblock_error(bio);
-			return false;
+			return;
 		}
 		mddev_add_trace_msg(conf->mddev,
 			"raid10 wait reshape metadata");
@@ -1514,8 +1514,7 @@ static bool raid10_write_request(struct mddev *mddev, struct bio *bio,
 			raid10_write_one_disk(mddev, r10_bio, bio, true, i);
 	}
 	one_write_done(r10_bio);
-	return true;
-
+	return;
 err_handle:
 	for (k = 0;  k < i; k++) {
 		int d = r10_bio->devs[k].devnum;
@@ -1533,12 +1532,10 @@ err_handle:
 	}
 
 	raid_end_bio_io(r10_bio);
-	return false;
 }
 
-static bool __make_request(struct mddev *mddev, struct bio *bio, int sectors)
+static void __make_request(struct mddev *mddev, struct bio *bio, int sectors)
 {
-	bool ret;
 	struct r10conf *conf = mddev->private;
 	struct r10bio *r10_bio;
 
@@ -1554,13 +1551,10 @@ static bool __make_request(struct mddev *mddev, struct bio *bio, int sectors)
 	memset(r10_bio->devs, 0, sizeof(r10_bio->devs[0]) *
 			conf->geo.raid_disks);
 
-	ret = true;
 	if (bio_data_dir(bio) == READ)
 		raid10_read_request(mddev, bio, r10_bio);
 	else
-		ret = raid10_write_request(mddev, bio, r10_bio);
-
-	return ret;
+		raid10_write_request(mddev, bio, r10_bio);
 }
 
 static void raid_end_discard_bio(struct r10bio *r10bio)
@@ -1639,7 +1633,6 @@ static int raid10_handle_discard(struct mddev *mddev, struct bio *bio)
 
 	if (!wait_barrier(conf, bio->bi_opf & REQ_NOWAIT)) {
 		bio_wouldblock_error(bio);
-		md_write_end(mddev);
 		return 0;
 	}
 
@@ -1682,8 +1675,6 @@ static int raid10_handle_discard(struct mddev *mddev, struct bio *bio)
 		if (IS_ERR(split)) {
 			bio->bi_status = errno_to_blk_status(PTR_ERR(split));
 			bio_endio(bio);
-			md_write_end(mddev);
-			allow_barrier(conf);
 			return 0;
 		}
 
@@ -1701,8 +1692,6 @@ static int raid10_handle_discard(struct mddev *mddev, struct bio *bio)
 		if (IS_ERR(split)) {
 			bio->bi_status = errno_to_blk_status(PTR_ERR(split));
 			bio_endio(bio);
-			md_write_end(mddev);
-			allow_barrier(conf);
 			return 0;
 		}
 
@@ -1911,8 +1900,7 @@ static bool raid10_make_request(struct mddev *mddev, struct bio *bio)
 		sectors = chunk_sects -
 			(bio->bi_iter.bi_sector &
 			 (chunk_sects - 1));
-	if (!__make_request(mddev, bio, sectors))
-		md_write_end(mddev);
+	__make_request(mddev, bio, sectors);
 
 	/* In case raid10d snuck in to freeze_array */
 	wake_up_barrier(conf);

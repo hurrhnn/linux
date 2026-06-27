@@ -3803,7 +3803,7 @@ static int gpiochip_set_multiple(struct gpio_chip *gc,
 				 unsigned long *mask, unsigned long *bits)
 {
 	unsigned int i;
-	int ret = 0;
+	int ret;
 
 	lockdep_assert_held(&gc->gpiodev->srcu);
 

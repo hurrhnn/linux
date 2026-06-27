@@ -550,18 +550,11 @@ static void bfq_pd_init(struct blkg_policy_data *pd)
 	bfqg->rq_pos_tree = RB_ROOT;
 }
 
-static void bfqg_release(struct rcu_head *rcu)
+static void bfq_pd_free(struct blkg_policy_data *pd)
 {
-	struct blkg_policy_data *pd =
-		container_of(rcu, struct blkg_policy_data, rcu_head);
 	struct bfq_group *bfqg = pd_to_bfqg(pd);
 
 	bfqg_put(bfqg);
-}
-
-static void bfq_pd_free(struct blkg_policy_data *pd)
-{
-	call_rcu(&pd->rcu_head, bfqg_release);
 }
 
 static void bfq_pd_reset_stats(struct blkg_policy_data *pd)
@@ -943,23 +936,14 @@ put_async_queues:
 
 void bfq_end_wr_async(struct bfq_data *bfqd)
 {
-	struct request_queue *q = bfqd->queue;
 	struct blkcg_gq *blkg;
 
-	mutex_lock(&q->blkcg_mutex);
-	spin_lock_irq(&q->queue_lock);
-	spin_lock(&bfqd->lock);
-
-	list_for_each_entry(blkg, &q->blkg_list, q_node) {
+	list_for_each_entry(blkg, &bfqd->queue->blkg_list, q_node) {
 		struct bfq_group *bfqg = blkg_to_bfqg(blkg);
 
 		bfq_end_wr_async_queues(bfqd, bfqg);
 	}
 	bfq_end_wr_async_queues(bfqd, bfqd->root_group);
-
-	spin_unlock(&bfqd->lock);
-	spin_unlock_irq(&q->queue_lock);
-	mutex_unlock(&q->blkcg_mutex);
 }
 
 static int bfq_io_show_weight_legacy(struct seq_file *sf, void *v)
@@ -1163,18 +1147,16 @@ static u64 bfqg_prfill_stat_recursive(struct seq_file *sf,
 	struct cgroup_subsys_state *pos_css;
 	u64 sum = 0;
 
+	lockdep_assert_held(&blkg->q->queue_lock);
+
 	rcu_read_lock();
 	blkg_for_each_descendant_pre(pos_blkg, pos_css, blkg) {
-		struct blkg_policy_data *pd;
 		struct bfq_stat *stat;
 
 		if (!pos_blkg->online)
 			continue;
 
-		pd = blkg_to_pd(pos_blkg, &blkcg_policy_bfq);
-		if (!pd)
-			continue;
-		stat = (void *)pd + off;
+		stat = (void *)blkg_to_pd(pos_blkg, &blkcg_policy_bfq) + off;
 		sum += bfq_stat_read(stat) + atomic64_read(&stat->aux_cnt);
 	}
 	rcu_read_unlock();
@@ -1434,9 +1416,7 @@ void bfq_bic_update_cgroup(struct bfq_io_cq *bic, struct bio *bio) {}
 
 void bfq_end_wr_async(struct bfq_data *bfqd)
 {
-	spin_lock_irq(&bfqd->lock);
 	bfq_end_wr_async_queues(bfqd, bfqd->root_group);
-	spin_unlock_irq(&bfqd->lock);
 }
 
 struct bfq_group *bfq_bio_bfqg(struct bfq_data *bfqd, struct bio *bio)

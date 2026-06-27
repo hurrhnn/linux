@@ -639,21 +639,18 @@ static const struct file_operations nvme_ns_head_chr_fops = {
 	.uring_cmd_iopoll = nvme_ns_chr_uring_cmd_iopoll,
 };
 
-static void nvme_add_ns_head_cdev(struct nvme_ns_head *head)
+static int nvme_add_ns_head_cdev(struct nvme_ns_head *head)
 {
-	char name[32];
+	int ret;
 
 	head->cdev_device.parent = &head->subsys->dev;
-	snprintf(name, sizeof(name), "ng%dn%d", head->subsys->instance,
-		 head->instance);
-
-	if (nvme_cdev_add(name, &head->cdev, &head->cdev_device,
-			&nvme_ns_head_chr_fops, THIS_MODULE)) {
-		dev_err(disk_to_dev(head->disk),
-			"Unable to create the %s device\n", name);
-		return;
-	}
-	set_bit(NVME_NSHEAD_CDEV_LIVE, &head->flags);
+	ret = dev_set_name(&head->cdev_device, "ng%dn%d",
+			   head->subsys->instance, head->instance);
+	if (ret)
+		return ret;
+	ret = nvme_cdev_add(&head->cdev, &head->cdev_device,
+			    &nvme_ns_head_chr_fops, THIS_MODULE);
+	return ret;
 }
 
 static void nvme_partition_scan_work(struct work_struct *work)
@@ -697,8 +694,7 @@ static void nvme_remove_head(struct nvme_ns_head *head)
 		 */
 		kblockd_schedule_work(&head->requeue_work);
 
-		if (test_and_clear_bit(NVME_NSHEAD_CDEV_LIVE, &head->flags))
-			nvme_cdev_del(&head->cdev, &head->cdev_device);
+		nvme_cdev_del(&head->cdev, &head->cdev_device);
 		synchronize_srcu(&head->srcu);
 		del_gendisk(head->disk);
 	}
